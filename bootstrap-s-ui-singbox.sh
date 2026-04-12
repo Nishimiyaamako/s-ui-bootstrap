@@ -62,6 +62,19 @@ prompt_default() {
   fi
 }
 
+prompt_required() {
+  local prompt="$1"
+  local var
+  while true; do
+    read -r -p "$prompt" var
+    if [[ -n "$var" ]]; then
+      echo "$var"
+      return 0
+    fi
+    echo "输入不能为空，请重试。"
+  done
+}
+
 prompt_yes_no_default() {
   local prompt="$1"
   local default_val="$2"
@@ -198,6 +211,91 @@ install_sui_docker_compose() {
   docker ps --filter name=s-ui
 }
 
+setup_cloudflared_optional() {
+  local continue_cf raw_cmd token ans
+
+  continue_cf=$(prompt_yes_no_default "首轮安装完成后，是否继续配置 cloudflared（Docker）？" "n")
+  if [[ "$continue_cf" != "y" ]]; then
+    msg "已跳过 cloudflared 后续配置。"
+    return 0
+  fi
+
+  raw_cmd=$(prompt_required "请粘贴 Cloudflare 网页提供的 docker run 命令: ")
+  token=$(printf '%s' "$raw_cmd" | sed -nE 's/.*--token[= ]([^ ]+).*/\1/p')
+
+  if [[ -z "$token" ]]; then
+    token=$(prompt_required "未识别到 --token，请手动输入 token: ")
+  fi
+
+  msg "===== cloudflared 参数总览（执行前确认）====="
+  echo "容器名称        : cloudflared"
+  echo "镜像            : cloudflare/cloudflared:latest"
+  echo "运行参数        : tunnel --no-autoupdate run --token <已隐藏>"
+
+  read -r -p "确认开始部署 cloudflared 容器？(y/N): " ans
+  if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+    warn "已取消 cloudflared 部署。"
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "未检测到 Docker，先自动安装 Docker。"
+    install_docker_engine
+  else
+    systemctl enable --now docker || warn "Docker 启动失败，请手动检查。"
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -qx 'cloudflared'; then
+    warn "检测到旧的 cloudflared 容器，先删除后重建。"
+    docker rm -f cloudflared >/dev/null 2>&1 || true
+  fi
+
+  docker run -d \
+    --name cloudflared \
+    --restart unless-stopped \
+    cloudflare/cloudflared:latest \
+    tunnel --no-autoupdate run --token "$token"
+
+  docker ps --filter name=cloudflared
+  msg "cloudflared 已后台运行并设置开机自启动。"
+  msg "查看日志命令: docker logs --tail 100 cloudflared"
+}
+
+ensure_autostart() {
+  local install_mode="$1"
+  local docker_dir="$2"
+
+  msg "配置开机自启动..."
+
+  if [[ "$install_mode" == "direct" ]]; then
+    if systemctl list-unit-files --type=service | awk '{print $1}' | grep -qx 's-ui.service'; then
+      systemctl enable --now s-ui || warn "启用 s-ui 开机自启失败，请手动执行: systemctl enable --now s-ui"
+    else
+      warn "未检测到 s-ui.service，请手动检查服务名称。"
+    fi
+
+    if systemctl list-unit-files --type=service | awk '{print $1}' | grep -qx 'sing-box.service'; then
+      systemctl enable --now sing-box || warn "启用 sing-box 开机自启失败，请手动执行: systemctl enable --now sing-box"
+    else
+      warn "未检测到 sing-box.service，请手动检查服务名称。"
+    fi
+  else
+    systemctl enable --now docker || warn "启用 docker 开机自启失败，请手动执行: systemctl enable --now docker"
+
+    local container_ids
+    container_ids=$(cd "$docker_dir" && docker compose ps -q || true)
+
+    if [[ -n "$container_ids" ]]; then
+      while IFS= read -r cid; do
+        [[ -n "$cid" ]] && docker update --restart unless-stopped "$cid" >/dev/null || true
+      done <<< "$container_ids"
+      msg "已为 docker 模式容器设置 restart=unless-stopped。"
+    else
+      warn "未获取到容器 ID，请手动确认 docker compose 已启动并设置重启策略。"
+    fi
+  fi
+}
+
 show_post_install_info() {
   local install_mode="$1"
 
@@ -290,10 +388,12 @@ main() {
     install_sui_docker_compose "$docker_dir"
   fi
 
+  ensure_autostart "$install_mode" "$docker_dir"
   show_post_install_info "$install_mode"
+  setup_cloudflared_optional
 
   msg "=== 脚本执行完成 ==="
-  msg "你现在可以按习惯继续手动完成域名与网页侧配置。"
+  msg "你现在可以按习惯继续完成 Cloudflare 网页侧的域名与入口配置。"
 }
 
 main "$@"
