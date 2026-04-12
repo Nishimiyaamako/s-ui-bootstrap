@@ -227,10 +227,17 @@ setup_cloudflared_optional() {
     token=$(prompt_required "未识别到 --token，请手动输入 token: ")
   fi
 
+  token="${token#\"}"
+  token="${token%\"}"
+  token="${token#\'}"
+  token="${token%\'}"
+
   msg "===== cloudflared 参数总览（执行前确认）====="
   echo "容器名称        : cloudflared"
   echo "镜像            : cloudflare/cloudflared:latest"
+  echo "网络模式        : host（避免容器 localhost 回源到自身导致 502）"
   echo "运行参数        : tunnel --no-autoupdate run --token <已隐藏>"
+  echo "面板回源建议    : 在 Zero Trust 里填写 http://127.0.0.1:2095"
 
   read -r -p "确认开始部署 cloudflared 容器？(y/N): " ans
   if [[ ! "$ans" =~ ^[Yy]$ ]]; then
@@ -252,12 +259,18 @@ setup_cloudflared_optional() {
 
   docker run -d \
     --name cloudflared \
+    --network host \
     --restart unless-stopped \
     cloudflare/cloudflared:latest \
     tunnel --no-autoupdate run --token "$token"
 
   docker ps --filter name=cloudflared
-  msg "cloudflared 已后台运行并设置开机自启动。"
+  sleep 2
+  if docker logs --tail 80 cloudflared 2>/dev/null | grep -qiE 'connection refused|Unable to reach the origin service'; then
+    warn "检测到 cloudflared 回源异常。请在 Zero Trust 把 Service URL 设为 http://127.0.0.1:2095（不要写 https）。"
+  fi
+
+  msg "cloudflared 已后台运行并设置开机自启动（host 网络模式）。"
   msg "查看日志命令: docker logs --tail 100 cloudflared"
 }
 
