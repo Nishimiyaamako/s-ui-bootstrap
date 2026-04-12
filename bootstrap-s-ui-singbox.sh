@@ -201,14 +201,12 @@ main() {
   msg "日志文件: ${LOG_FILE}"
 
   local do_upgrade
-  local timezone
   local harden_ssh
   local ssh_port
   local panel_port
   local sui_install_url
 
   do_upgrade=$(prompt_default "是否执行 full-upgrade？(y/n)" "y")
-  timezone=$(prompt_default "时区" "Asia/Shanghai")
   harden_ssh=$(prompt_default "是否执行 SSH 加固（禁密登录）？(y/n)" "y")
   ssh_port=$(prompt_default "SSH 端口" "22")
   panel_port=$(prompt_default "S-ui 面板端口" "2053")
@@ -221,7 +219,6 @@ main() {
 
   msg "===== 参数确认 ====="
   echo "full-upgrade: ${do_upgrade}"
-  echo "timezone: ${timezone}"
   echo "harden_ssh: ${harden_ssh}"
   echo "ssh_port: ${ssh_port}"
   echo "panel_port: ${panel_port}"
@@ -229,9 +226,6 @@ main() {
   confirm_continue
 
   install_base_packages "$do_upgrade"
-
-  msg "设置时区: ${timezone}"
-  timedatectl set-timezone "$timezone"
 
   configure_ssh "$ssh_port" "$harden_ssh"
   configure_ufw "$ssh_port"
