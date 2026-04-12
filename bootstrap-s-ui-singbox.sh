@@ -6,6 +6,9 @@ mkdir -p "$(dirname "$LOG_FILE")"
 touch "$LOG_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
+SUI_INSTALL_DIRECT_CMD='bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh)'
+SUI_DOCKER_COMPOSE_URL='https://raw.githubusercontent.com/alireza0/s-ui/master/docker-compose.yml'
+
 on_error() {
   local line="$1"
   echo "[ERROR] 脚本在第 ${line} 行失败。请查看日志: ${LOG_FILE}" >&2
@@ -47,19 +50,6 @@ port_in_use() {
   ss -lnt "( sport = :${port} )" | tail -n +2 | grep -q .
 }
 
-prompt_required() {
-  local prompt="$1"
-  local var
-  while true; do
-    read -r -p "$prompt" var
-    if [[ -n "$var" ]]; then
-      echo "$var"
-      return 0
-    fi
-    echo "输入不能为空，请重试。"
-  done
-}
-
 prompt_default() {
   local prompt="$1"
   local default_val="$2"
@@ -72,9 +62,51 @@ prompt_default() {
   fi
 }
 
+prompt_yes_no_default() {
+  local prompt="$1"
+  local default_val="$2"
+  local var
+
+  while true; do
+    read -r -p "$prompt [默认: ${default_val}] (y/n): " var
+    var="${var:-$default_val}"
+    var="${var,,}"
+
+    if [[ "$var" == "y" || "$var" == "yes" ]]; then
+      echo "y"
+      return 0
+    fi
+    if [[ "$var" == "n" || "$var" == "no" ]]; then
+      echo "n"
+      return 0
+    fi
+
+    echo "请输入 y 或 n。"
+  done
+}
+
+prompt_install_mode() {
+  local var
+  while true; do
+    read -r -p "S-ui 安装模式 (direct/docker) [默认: direct]: " var
+    var="${var:-direct}"
+    var="${var,,}"
+    if [[ "$var" == "direct" || "$var" == "docker" ]]; then
+      echo "$var"
+      return 0
+    fi
+    echo "安装模式仅支持 direct 或 docker。"
+  done
+}
+
+validate_port() {
+  local p="$1"
+  [[ "$p" =~ ^[0-9]+$ ]] && ((p >= 1 && p <= 65535))
+}
+
 confirm_continue() {
   local ans
-  read -r -p "确认继续执行？(y/N): " ans
+  read -r -p "确认以上参数无误并开始执行？(y/N): " ans
   if [[ ! "$ans" =~ ^[Yy]$ ]]; then
     echo "已取消。"
     exit 0
@@ -143,54 +175,51 @@ install_base_packages() {
     curl wget ca-certificates gnupg lsb-release jq ufw unzip openssl vim
 }
 
-install_sui() {
-  local sui_install_url="$1"
-
-  msg "下载并执行 S-ui 安装脚本: ${sui_install_url}"
-  local tmp_file="/tmp/s-ui-install.sh"
-  curl -fsSL "$sui_install_url" -o "$tmp_file"
-  bash "$tmp_file"
+install_sui_direct() {
+  msg "按官方 direct 安装方式执行 S-ui 安装..."
+  bash <(curl -Ls https://raw.githubusercontent.com/alireza0/s-ui/master/install.sh)
 }
 
-manual_sui_init_guide() {
-  local panel_port="$1"
+install_docker_engine() {
+  msg "安装 Docker（官方方式）..."
+  curl -fsSL https://get.docker.com | sh
+  systemctl enable --now docker
+  docker --version
+}
 
-  local panel_cli=""
-  if command -v s-ui >/dev/null 2>&1; then
-    panel_cli="s-ui"
-  elif command -v x-ui >/dev/null 2>&1; then
-    panel_cli="x-ui"
-  fi
+install_sui_docker_compose() {
+  local docker_dir="$1"
 
-  msg "===== S-ui 初始化（手动）====="
-  echo "请在菜单中至少完成以下项目："
-  echo "1) 重置管理员用户名和密码"
-  echo "2) 修改面板端口为: ${panel_port}"
-  echo "3) 设置随机 Web Base Path"
+  msg "按官方 docker-compose 方式安装 S-ui..."
+  mkdir -p "$docker_dir"
+  cd "$docker_dir"
+  wget -q "$SUI_DOCKER_COMPOSE_URL" -O docker-compose.yml
+  docker compose up -d
+  docker ps --filter name=s-ui
+}
+
+show_post_install_info() {
+  local install_mode="$1"
+
+  msg "=== 安装完成，关键信息 ==="
+  echo "默认面板端口: 2095"
+  echo "默认面板路径: /app/"
+  echo "默认订阅端口: 2096"
+  echo "默认订阅路径: /sub/"
+  echo "默认账号密码: admin / admin"
   echo ""
 
-  if [[ -n "$panel_cli" ]]; then
-    read -r -p "按回车打开 ${panel_cli} 菜单进行手动初始化..."
-    "$panel_cli" || true
+  if [[ "$install_mode" == "direct" ]]; then
+    command -v s-ui >/dev/null 2>&1 && s-ui status || true
+    systemctl status s-ui --no-pager | sed -n '1,10p' || true
+    systemctl status sing-box --no-pager | sed -n '1,10p' || true
   else
-    warn "未检测到 s-ui/x-ui 命令，请按 S-ui 文档手动完成初始化。"
+    docker ps --filter name=s-ui || true
   fi
 
-  read -r -p "完成 S-ui 初始化后，按回车继续..."
-}
+  curl -I --max-time 5 http://127.0.0.1:2095/app/ || true
 
-validate_panel_port() {
-  local panel_port="$1"
-
-  msg "验证 S-ui 本机连通性..."
-
-  if ! port_in_use "$panel_port"; then
-    warn "端口 ${panel_port} 当前未监听，请检查 S-ui 是否已启动。"
-  else
-    msg "检测到端口 ${panel_port} 已监听。"
-  fi
-
-  curl -I --max-time 5 "http://127.0.0.1:${panel_port}" || true
+  msg "首次登录后请立即修改默认管理员密码。"
 }
 
 main() {
@@ -199,44 +228,72 @@ main() {
 
   msg "=== S-ui + sing-box 首装脚本（Debian 12）==="
   msg "日志文件: ${LOG_FILE}"
+  msg "该脚本基于官方 README 的安装方式实现（direct/docker，默认 direct）。"
 
   local do_upgrade
   local harden_ssh
   local ssh_port
-  local panel_port
-  local sui_install_url
+  local panel_port_plan
+  local install_mode
+  local docker_dir
 
-  do_upgrade=$(prompt_default "是否执行 full-upgrade？(y/n)" "y")
-  harden_ssh=$(prompt_default "是否执行 SSH 加固（禁密登录）？(y/n)" "y")
+  do_upgrade=$(prompt_yes_no_default "是否执行 full-upgrade？" "y")
+  harden_ssh=$(prompt_yes_no_default "是否执行 SSH 加固（禁密登录）？" "y")
   ssh_port=$(prompt_default "SSH 端口" "22")
-  panel_port=$(prompt_default "S-ui 面板端口" "2053")
-  sui_install_url=$(prompt_required "S-ui 官方安装脚本 URL（raw 链接）: ")
+  panel_port_plan=$(prompt_default "计划使用的 S-ui 面板端口（仅用于占用检查与规划）" "2095")
+  install_mode=$(prompt_install_mode)
+  docker_dir=$(prompt_default "Docker 安装目录（docker 模式时使用）" "/opt/s-ui")
 
-  if port_in_use "$panel_port"; then
-    warn "端口 ${panel_port} 已被占用，请更换后重试。"
+  if ! validate_port "$ssh_port"; then
+    echo "SSH 端口非法: ${ssh_port}" >&2
     exit 1
   fi
 
-  msg "===== 参数确认 ====="
-  echo "full-upgrade: ${do_upgrade}"
-  echo "harden_ssh: ${harden_ssh}"
-  echo "ssh_port: ${ssh_port}"
-  echo "panel_port: ${panel_port}"
-  echo "s-ui url : ${sui_install_url}"
+  if ! validate_port "$panel_port_plan"; then
+    echo "面板端口非法: ${panel_port_plan}" >&2
+    exit 1
+  fi
+
+  msg "===== 参数总览（执行前确认）====="
+  echo "系统要求          : Debian 12"
+  echo "full-upgrade       : ${do_upgrade}"
+  echo "SSH 加固           : ${harden_ssh}"
+  echo "SSH 端口           : ${ssh_port}"
+  echo "安装模式           : ${install_mode}"
+  echo "面板端口规划       : ${panel_port_plan}"
+  echo "Docker 安装目录    : ${docker_dir}"
+  echo "Direct 官方命令    : ${SUI_INSTALL_DIRECT_CMD}"
+  echo "Docker compose URL : ${SUI_DOCKER_COMPOSE_URL}"
+
+  if port_in_use "$panel_port_plan"; then
+    warn "检测到端口 ${panel_port_plan} 已被占用，后续请在 S-ui 中改端口或释放占用。"
+  fi
+
+  if [[ "$install_mode" == "docker" ]]; then
+    for p in 80 443 2095 2096; do
+      if port_in_use "$p"; then
+        warn "docker 模式默认会占用端口 ${p}，当前检测到已占用。"
+      fi
+    done
+  fi
+
   confirm_continue
 
   install_base_packages "$do_upgrade"
-
   configure_ssh "$ssh_port" "$harden_ssh"
   configure_ufw "$ssh_port"
 
-  install_sui "$sui_install_url"
-  manual_sui_init_guide "$panel_port"
-  validate_panel_port "$panel_port"
+  if [[ "$install_mode" == "direct" ]]; then
+    install_sui_direct
+  else
+    install_docker_engine
+    install_sui_docker_compose "$docker_dir"
+  fi
+
+  show_post_install_info "$install_mode"
 
   msg "=== 脚本执行完成 ==="
-  msg "Cloudflare 相关自动化步骤已移除。"
-  msg "后续域名入口与网页侧配置请按你的习惯手动完成。"
+  msg "你现在可以按习惯继续手动完成域名与网页侧配置。"
 }
 
 main "$@"
