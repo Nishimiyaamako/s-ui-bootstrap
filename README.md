@@ -1,11 +1,22 @@
 # s-ui-bootstrap
 
-Debian 12 新机首装脚本：基于 S-ui 官方 README 的安装方式，支持 `direct` 与 `docker` 两种模式（默认 `direct`），并可在首轮安装后可选接续 cloudflared Docker 配置。
+Debian 12 新机首装脚本集合，当前提供：
+
+- `bootstrap-s-ui-singbox.sh`：完整版（`direct` / `docker`，可选 SSH/UFW 收敛，可选 cloudflared）
+- `bootstrap-s-ui-docker-open.sh`：快速版（仅 Docker 安装 S-ui，不做 SSH/UFW 收敛，保持端口开放）
 
 ## 一键下载并启动
 
+### 完整版（可选安全收敛 + direct/docker）
+
 ```bash
 apt update && apt install -y curl && bash <(curl -fsSL https://raw.githubusercontent.com/Nishimiyaamako/s-ui-bootstrap/main/bootstrap-s-ui-singbox.sh)
+```
+
+### 开放端口快速版（仅 Docker，不做安全收敛）
+
+```bash
+apt update && apt install -y curl && bash <(curl -fsSL https://raw.githubusercontent.com/Nishimiyaamako/s-ui-bootstrap/main/bootstrap-s-ui-docker-open.sh)
 ```
 
 ## 安装来源（与官方 README 对齐）
@@ -75,9 +86,18 @@ Zero Trust 里建议把 Service URL 配为：`http://127.0.0.1:2095`（不要写
 
 ## 使用方式
 
+### 完整版
+
 ```bash
 chmod +x ./bootstrap-s-ui-singbox.sh
 bash ./bootstrap-s-ui-singbox.sh
+```
+
+### 开放端口快速版
+
+```bash
+chmod +x ./bootstrap-s-ui-docker-open.sh
+bash ./bootstrap-s-ui-docker-open.sh
 ```
 
 ## 默认安装信息（S-ui 官方）
@@ -93,5 +113,6 @@ bash ./bootstrap-s-ui-singbox.sh
 ## 日志位置
 
 ```text
-/var/log/sui-singbox-bootstrap.log
+完整版: /var/log/sui-singbox-bootstrap.log
+开放端口快速版: /var/log/sui-docker-open-bootstrap.log
 ```
